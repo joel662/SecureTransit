@@ -3,6 +3,7 @@ import { View, StyleSheet, Button, Alert } from 'react-native';
 import MapView, { Polyline, Marker } from 'react-native-maps';
 import { Picker } from '@react-native-picker/picker';
 import { csvData } from '../../synthetic_telematics_data'; // Import the raw CSV data or JSON
+import haversine from 'haversine-distance';
 
 // Function to parse the CSV data
 const parseCSV = (str: string): any[] => {
@@ -16,11 +17,11 @@ const parseCSV = (str: string): any[] => {
   const headers = lines[0].split(',');
 
   for (let i = 1; i < lines.length; i++) {
-    const obj: { [key: string]: string } = {}; // Index signature allows dynamic keys
+    const obj: { [key: string]: string } = {};
     const currentline = lines[i].split(',');
 
     for (let j = 0; j < headers.length; j++) {
-      obj[headers[j]] = currentline[j];
+      obj[headers[j].trim()] = currentline[j].trim();
     }
 
     result.push(obj);
@@ -28,7 +29,6 @@ const parseCSV = (str: string): any[] => {
 
   return result;
 };
-
 
 // Determine the format of csvData and parse if necessary
 const parsedTelematicsData = Array.isArray(csvData) ? csvData : parseCSV(csvData);
@@ -48,8 +48,10 @@ const App: React.FC = () => {
   const [routeData, setRouteData] = useState<Route[]>([]); // Routes fetched from API
   const [busRoutes, setBusRoutes] = useState<Route[]>([]); // Displayed routes
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null); // Selected route
-  const [simulationIndex, setSimulationIndex] = useState<number | null>(null); // Index for simulation
+  const [simulationData, setSimulationData] = useState<any[]>([]); // Telematics data for simulation
+  const [markerPosition, setMarkerPosition] = useState<Coordinate | null>(null); // Position of the simulated vehicle
   const mapRef = useRef<MapView>(null);
+  const simulationTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Fetch route data from API
   const fetchRouteData = async () => {
@@ -98,11 +100,25 @@ const App: React.FC = () => {
 
   useEffect(() => {
     fetchRouteData(); // Fetch route data on mount
+
+    // Clean up the timer when the component unmounts
+    return () => {
+      if (simulationTimerRef.current) {
+        clearTimeout(simulationTimerRef.current);
+      }
+    };
   }, []);
 
   // Handle route selection from the Picker
   const handleRouteSelection = (routeId: string | null) => {
     if (!routeId) return;
+
+    // Clear existing simulation
+    setMarkerPosition(null);
+    if (simulationTimerRef.current) {
+      clearTimeout(simulationTimerRef.current);
+      simulationTimerRef.current = null;
+    }
 
     const selected = routeData.find((route) => route.routeId === routeId);
     if (selected) {
@@ -119,60 +135,160 @@ const App: React.FC = () => {
     }
   };
 
-  // Start simulation along the selected route
+  // Function to calculate distances between coordinates
+  const calculateRouteDistances = (coordinates: Coordinate[]) => {
+    const distances = [];
+    let totalDistance = 0;
+
+    for (let i = 0; i < coordinates.length - 1; i++) {
+      const start = coordinates[i];
+      const end = coordinates[i + 1];
+
+      const distance = haversine(start, end);
+      distances.push(distance);
+      totalDistance += distance;
+    }
+
+    return { distances, totalDistance };
+  };
+
+  // Function to get position along the route based on distance traveled
+  const getPositionAlongRoute = (
+    coordinates: Coordinate[],
+    distances: number[],
+    distanceTraveled: number
+  ): Coordinate => {
+    let accumulatedDistance = 0;
+
+    for (let i = 0; i < distances.length; i++) {
+      const segmentDistance = distances[i];
+      if (accumulatedDistance + segmentDistance >= distanceTraveled) {
+        const ratio = (distanceTraveled - accumulatedDistance) / segmentDistance;
+        const start = coordinates[i];
+        const end = coordinates[i + 1];
+
+        const latitude = start.latitude + (end.latitude - start.latitude) * ratio;
+        const longitude = start.longitude + (end.longitude - start.longitude) * ratio;
+
+        return { latitude, longitude };
+      }
+      accumulatedDistance += segmentDistance;
+    }
+
+    // If distanceTraveled exceeds the route length, return the last coordinate
+    return coordinates[coordinates.length - 1];
+  };
+
+  // Start the simulation
   const startSimulation = () => {
-    if (!selectedRoute) {
-      Alert.alert('Error', 'Please select a route to simulate.');
+    if (!selectedRoute) return;
+
+    // Clear existing timer if any
+    if (simulationTimerRef.current) {
+      clearTimeout(simulationTimerRef.current);
+      simulationTimerRef.current = null;
+    }
+
+    // Get the selected route
+    const selected = routeData.find((route) => route.routeId === selectedRoute);
+    if (!selected) {
+      Alert.alert('Error', 'Selected route data not found.');
       return;
     }
 
-    const route = busRoutes[0]; // Assume busRoutes contains the selected route
-    if (!route || route.coordinates.length === 0) {
-      Alert.alert('Error', 'Invalid route for simulation.');
+    // Calculate route distances
+    const { distances, totalDistance } = calculateRouteDistances(selected.coordinates);
+
+    // Ensure there is simulation data
+    if (parsedTelematicsData.length === 0) {
+      Alert.alert('Error', 'No simulation data available.');
       return;
     }
 
-    setSimulationIndex(0); // Start simulation at the first coordinate
+    // Sort the data by timestamp
+    const simulationData = [...parsedTelematicsData];
+    simulationData.sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
 
-    const interval = setInterval(() => {
-      setSimulationIndex((prevIndex) => {
-        if (
-          prevIndex === null ||
-          prevIndex >= route.coordinates.length - 1 ||
-          prevIndex >= parsedTelematicsData.length - 1
-        ) {
-          clearInterval(interval);
-          setSimulationIndex(null); // Stop simulation
-          Alert.alert('Simulation Complete', 'Route simulation finished.');
-          return null;
-        }
+    setSimulationData(simulationData);
 
-        // Get the current data point
-        const dataPoint = parsedTelematicsData[prevIndex];
+    // Start the simulation
+    simulateStep(0, simulationData, selected.coordinates, distances);
+  };
 
-        // Perform checks
-        if (dataPoint) {
-          const acceleration = parseFloat(dataPoint.acceleration_mps2);
-          const gyroscope_roll = parseFloat(dataPoint.gyroscope_roll);
-          const gyroscope_yaw = parseFloat(dataPoint.gyroscope_yaw);
+  // Recursive function to simulate vehicle movement
+  const simulateStep = (
+    index: number,
+    data: any[],
+    coordinates: Coordinate[],
+    distances: number[]
+  ) => {
+    if (index >= data.length - 1) {
+      // Simulation complete
+      setMarkerPosition(null);
+      if (simulationTimerRef.current) {
+        clearTimeout(simulationTimerRef.current);
+        simulationTimerRef.current = null;
+      }
+      return;
+    }
 
-          if (acceleration > 1.5) {
-            console.log('Harsh acceleration');
-          }
-          if (acceleration < -1.5) {
-            console.log('Harsh braking');
-          }
-          if (gyroscope_roll > 10 || gyroscope_roll < -10) {
-            console.log('Harsh cornering');
-          }
-          if (gyroscope_yaw > 15 || gyroscope_yaw < -15) {
-            console.log('Aggressive cornering');
-          }
-        }
+    // Calculate the time difference to the next data point in milliseconds
+    const currentTimestamp = new Date(data[index].timestamp).getTime();
+    const nextTimestamp = new Date(data[index + 1].timestamp).getTime();
+    let delay = nextTimestamp - currentTimestamp;
 
-        return prevIndex + 1; // Move to the next coordinate
-      });
-    }, 1000); // Move every 1 second
+    if (delay < 0) delay = 0; // Ensure non-negative delay
+
+    // Calculate distance traveled during this time interval
+    const speed = parseFloat(data[index].speed_kmph); // Speed in km/h
+    const timeDiffHours = delay / (1000 * 3600); // Time difference in hours
+    const distanceTraveled = speed * timeDiffHours * 1000; // Convert km to meters
+
+    // Accumulate total distance traveled
+    const previousDistance = data[index].cumulativeDistance || 0;
+    const cumulativeDistance = previousDistance + distanceTraveled;
+
+    // Update the cumulative distance in the data array
+    data[index + 1].cumulativeDistance = cumulativeDistance;
+
+    // Get position along the route
+    const position = getPositionAlongRoute(coordinates, distances, cumulativeDistance);
+
+    // Update the marker position
+    setMarkerPosition(position);
+
+    // --- Add the event detection logic here ---
+
+    // Parse the telematics data to ensure they are numbers
+    const acceleration_mps2 = parseFloat(data[index].acceleration_mps2);
+    const gyroscope_yaw = parseFloat(data[index].gyroscope_yaw);
+    const gyroscope_roll = parseFloat(data[index].gyroscope_roll);
+
+    // Check for harsh acceleration or braking
+    if (acceleration_mps2 > 1.25) {
+      console.log('Harsh Acceleration detected at timestamp:', data[index].timestamp);
+    } else if (acceleration_mps2 < -1.25) {
+      console.log('Harsh Braking detected at timestamp:', data[index].timestamp);
+    }
+
+    // Check for aggressive driving based on gyroscope yaw
+    if (gyroscope_yaw > 15 || gyroscope_yaw < -15) {
+      console.log('Aggressive Driving detected at timestamp:', data[index].timestamp);
+    }
+
+    // Check for harsh cornering based on gyroscope roll
+    if (gyroscope_roll > 10 || gyroscope_roll < -10) {
+      console.log('Harsh Cornering detected at timestamp:', data[index].timestamp);
+    }
+
+    // ------------------------------------------
+
+    // Schedule the next step
+    simulationTimerRef.current = setTimeout(() => {
+      simulateStep(index + 1, data, coordinates, distances);
+    }, delay);
   };
 
   return (
@@ -195,11 +311,8 @@ const App: React.FC = () => {
             strokeWidth={3}
           />
         ))}
-        {simulationIndex !== null && busRoutes.length > 0 && (
-          <Marker
-            coordinate={busRoutes[0].coordinates[simulationIndex]}
-            title="Simulated Position"
-          />
+        {markerPosition && (
+          <Marker coordinate={markerPosition} title="Simulated Position" />
         )}
       </MapView>
       <Picker
@@ -209,7 +322,11 @@ const App: React.FC = () => {
       >
         <Picker.Item label="Select a route" value={null} />
         {routeData.map((route) => (
-          <Picker.Item key={route.routeId} label={`Route ${route.routeId}`} value={route.routeId} />
+          <Picker.Item
+            key={route.routeId}
+            label={`Route ${route.routeId}`}
+            value={route.routeId}
+          />
         ))}
       </Picker>
       <Button title="Start Simulation" onPress={startSimulation} disabled={!selectedRoute} />
