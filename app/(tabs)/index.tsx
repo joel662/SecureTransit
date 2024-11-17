@@ -2,7 +2,38 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, StyleSheet, Button, Alert } from 'react-native';
 import MapView, { Polyline, Marker } from 'react-native-maps';
 import { Picker } from '@react-native-picker/picker';
-import { getDistance } from 'geolib';
+import { csvData } from '../../synthetic_telematics_data'; // Import the raw CSV data or JSON
+
+// Function to parse the CSV data
+const parseCSV = (str: string): any[] => {
+  if (!str) {
+    console.error('CSV data is invalid. Ensure it is a non-empty string.');
+    return [];
+  }
+
+  const lines = str.trim().split('\n');
+  const result: any[] = [];
+  const headers = lines[0].split(',');
+
+  for (let i = 1; i < lines.length; i++) {
+    const obj: { [key: string]: string } = {}; // Index signature allows dynamic keys
+    const currentline = lines[i].split(',');
+
+    for (let j = 0; j < headers.length; j++) {
+      obj[headers[j]] = currentline[j];
+    }
+
+    result.push(obj);
+  }
+
+  return result;
+};
+
+
+// Determine the format of csvData and parse if necessary
+const parsedTelematicsData = Array.isArray(csvData) ? csvData : parseCSV(csvData);
+
+// Interface definitions for TypeScript users (optional, for clarity)
 interface Coordinate {
   latitude: number;
   longitude: number;
@@ -13,67 +44,12 @@ interface Route {
   coordinates: Coordinate[];
 }
 
-interface TelematicsDataPoint {
-  timestamp: string;
-  speed_kmph: string;
-  acceleration_mps2: string;
-  gyroscope_pitch: string;
-  gyroscope_roll: string;
-  gyroscope_yaw: string;
-}
-
 const App: React.FC = () => {
   const [routeData, setRouteData] = useState<Route[]>([]); // Routes fetched from API
   const [busRoutes, setBusRoutes] = useState<Route[]>([]); // Displayed routes
   const [selectedRoute, setSelectedRoute] = useState<string | null>(null); // Selected route
   const [simulationIndex, setSimulationIndex] = useState<number | null>(null); // Index for simulation
   const mapRef = useRef<MapView>(null);
-  
-
-  // Include your CSV data as a string
-  const csvData = `
-timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_yaw
-2024-11-16 22:29:50,0.16,0.16,-0.35,6.93,-6.96
-2024-11-16 22:29:51,0.45,0.29,0.3,8.61,-10.86
-2024-11-16 22:29:52,2.92,2.47,2.44,7.44,3.32
-2024-11-16 22:29:53,4.03,1.11,2.02,0.14,-2.17
-2024-11-16 22:29:54,6.89,2.86,2.79,4.22,2.84
-2024-11-16 22:29:55,8.35,1.46,0.64,-0.63,-13.17
-2024-11-16 22:29:56,8.76,0.41,-0.55,2.42,-1.59
-2024-11-16 22:29:57,10.15,1.39,0.82,8.76,6.46
-2024-11-16 22:29:58,10.89,0.74,-0.05,-5.61,-6.98
-2024-11-16 22:29:59,12.49,1.6,1.17,-10.2,-7.0
-2024-11-16 22:30:00,12.89,0.4,0.16,8.67,-9.08
-2024-11-16 22:30:01,15.5,2.61,2.64,1.73,-9.16
-2024-11-16 22:30:02,16.39,0.89,0.73,4.25,-11.84
-2024-11-16 22:30:03,17.45,1.06,1.54,5.12,-4.54
-2024-11-16 22:30:04,20.13,2.68,2.27,-6.06,-4.02
-2024-11-16 22:30:05,21.95,1.82,1.3,2.51,-12.61
-2024-11-16 22:30:06,22.94,0.99,1.68,-4.87,9.55
-`;
-
-  // Function to parse the CSV data
-  const parseCSV = (str: string): TelematicsDataPoint[] => {
-    const lines = str.trim().split('\n');
-    const result: TelematicsDataPoint[] = [];
-    const headers = lines[0].split(',');
-
-    for (let i = 1; i < lines.length; i++) {
-      const obj: any = {};
-      const currentline = lines[i].split(',');
-
-      for (let j = 0; j < headers.length; j++) {
-        obj[headers[j]] = currentline[j];
-      }
-
-      result.push(obj);
-    }
-
-    return result;
-  };
-
-  // Parse the CSV data
-  const telematicsData = parseCSV(csvData);
 
   // Fetch route data from API
   const fetchRouteData = async () => {
@@ -163,7 +139,7 @@ timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_
         if (
           prevIndex === null ||
           prevIndex >= route.coordinates.length - 1 ||
-          prevIndex >= telematicsData.length - 1
+          prevIndex >= parsedTelematicsData.length - 1
         ) {
           clearInterval(interval);
           setSimulationIndex(null); // Stop simulation
@@ -172,7 +148,7 @@ timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_
         }
 
         // Get the current data point
-        const dataPoint = telematicsData[prevIndex];
+        const dataPoint = parsedTelematicsData[prevIndex];
 
         // Perform checks
         if (dataPoint) {
@@ -199,36 +175,6 @@ timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_
     }, 1000); // Move every 1 second
   };
 
-  // Render the routes on the map
-  const renderBusRoutes = () => {
-    if (!busRoutes || busRoutes.length === 0) return null;
-
-    return busRoutes.map((route, index) => (
-      <Polyline
-        key={`${route.routeId}-${index}`}
-        coordinates={route.coordinates}
-        strokeColor="#0000FF"
-        strokeWidth={3}
-      />
-    ));
-  };
-
-  // Render the simulation marker
-  const renderSimulationMarker = () => {
-    if (simulationIndex === null || busRoutes.length === 0) return null;
-
-    const route = busRoutes[0]; // Assume the first route in busRoutes is the selected one
-    const currentCoordinate = route.coordinates[simulationIndex];
-
-    return (
-      <Marker
-        coordinate={currentCoordinate}
-        title="Simulated Position"
-        description={`Point ${simulationIndex + 1} of ${route.coordinates.length}`}
-      />
-    );
-  };
-
   return (
     <View style={styles.container}>
       <MapView
@@ -241,15 +187,24 @@ timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_
           longitudeDelta: 0.01,
         }}
       >
-        {renderBusRoutes()}
-        {renderSimulationMarker()}
+        {busRoutes.map((route, index) => (
+          <Polyline
+            key={`${route.routeId}-${index}`}
+            coordinates={route.coordinates}
+            strokeColor="#0000FF"
+            strokeWidth={3}
+          />
+        ))}
+        {simulationIndex !== null && busRoutes.length > 0 && (
+          <Marker
+            coordinate={busRoutes[0].coordinates[simulationIndex]}
+            title="Simulated Position"
+          />
+        )}
       </MapView>
-
       <Picker
         selectedValue={selectedRoute}
-        onValueChange={(value) => {
-          handleRouteSelection(value);
-        }}
+        onValueChange={(value) => handleRouteSelection(value)}
         style={styles.picker}
       >
         <Picker.Item label="Select a route" value={null} />
@@ -257,12 +212,7 @@ timestamp,speed_kmph,acceleration_mps2,gyroscope_pitch,gyroscope_roll,gyroscope_
           <Picker.Item key={route.routeId} label={`Route ${route.routeId}`} value={route.routeId} />
         ))}
       </Picker>
-
-      <Button
-        title="Start Simulation"
-        onPress={startSimulation}
-        disabled={!selectedRoute}
-      />
+      <Button title="Start Simulation" onPress={startSimulation} disabled={!selectedRoute} />
     </View>
   );
 };
