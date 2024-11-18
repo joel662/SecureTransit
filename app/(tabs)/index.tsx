@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, StyleSheet, Button, Alert } from 'react-native';
+import { View, StyleSheet, Button, Alert, Platform } from 'react-native';
 import MapView, { Polyline, Marker } from 'react-native-maps';
 import { Picker } from '@react-native-picker/picker';
 import { csvData } from '../../synthetic_telematics_data'; // Import the raw CSV data or JSON
@@ -307,7 +307,7 @@ const App: React.FC = () => {
           <Polyline
             key={`${route.routeId}-${index}`}
             coordinates={route.coordinates}
-            strokeColor="#0000FF"
+            strokeColor="#FF00FF"
             strokeWidth={3}
           />
         ))}
@@ -315,29 +315,78 @@ const App: React.FC = () => {
           <Marker coordinate={markerPosition} title="Simulated Position" />
         )}
       </MapView>
-      <Picker
-        selectedValue={selectedRoute}
-        onValueChange={(value) => handleRouteSelection(value)}
-        style={styles.picker}
-      >
-        <Picker.Item label="Select a route" value={null} />
-        {routeData.map((route) => (
-          <Picker.Item
-            key={route.routeId}
-            label={`Route ${route.routeId}`}
-            value={route.routeId}
+      <View style={styles.rowContainer}>
+        <View style={styles.pickerContainer}>
+          <Picker
+            selectedValue={selectedRoute}
+            onValueChange={(value) => handleRouteSelection(value)}
+            style={styles.picker}
+            itemStyle={styles.pickerItem}
+          >
+            <Picker.Item label="Select a route" value={null} />
+            {routeData.map((route) => (
+              <Picker.Item
+                key={route.routeId}
+                label={`Route ${route.routeId}`}
+                value={route.routeId}
+              />
+            ))}
+          </Picker>
+        </View>
+        <View style={styles.buttonContainer}>
+          <Button
+            title="Start Simulation"
+            onPress={startSimulation}
+            disabled={!selectedRoute}
           />
-        ))}
-      </Picker>
-      <Button title="Start Simulation" onPress={startSimulation} disabled={!selectedRoute} />
+        </View>
+      </View>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  map: { flex: 1 },
-  picker: { height: 50, backgroundColor: '#ffffff', marginTop: 10 },
+  container: {
+    flex: 2,
+  },
+  map: {
+    flex: 1,
+  },
+  rowContainer: {
+    flexDirection: 'row', // Arrange items in a row
+    alignItems: 'center', // Center vertically
+    justifyContent: 'space-between', // Space between picker and button
+    paddingHorizontal: 10, // Add padding to the sides
+    marginBottom: 20,
+  },
+  
+  pickerContainer: {
+    flex: 1, // Take up remaining space
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CCCCCC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: Platform.OS === 'ios' ? -250 : 0
+  },
+  picker: {
+    width: '100%',
+    height: 50,
+    color: '#000',
+  },
+  pickerItem: {
+    color: '#000',
+    textAlign: 'center',
+    marginTop: -80
+  },
+  buttonContainer: {
+    marginLeft: 10, // Add spacing between picker and button
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: Platform.OS === 'ios' ? -250 : 0
+  },
 });
+
 
 export default App;
