@@ -55,6 +55,32 @@ const App: React.FC = () => {
 
   // Fetch route data from API
   const fetchRouteData = async () => {
+    /**
+ * Asynchronously fetches and processes transit route data from an ArcGIS FeatureServer in GeoJSON format.
+ *
+ * INPUT:
+ * - None (relies on internal `fetch` call to a fixed URL and updates local state via hooks).
+ *
+ * OUTPUT:
+ * - No return value.
+ * - Side Effects:
+ *   - Updates component state with valid route data using `setRouteData` and `setBusRoutes`.
+ *   - Shows an alert if the fetch or data processing fails.
+ *
+ * Process:
+ * - Sends a GET request to fetch all features (routes) from a GeoJSON endpoint.
+ * - Filters and maps valid features to a `Route` object structure:
+ *   - `routeId`: extracted from `feature.properties.route_id`
+ *   - `coordinates`: array of objects with `latitude` and `longitude` fields.
+ * - Discards features with invalid or empty geometries.
+ *
+ * Error Handling:
+ * - Logs errors to the console.
+ * - Displays an alert if data fetch or processing fails.
+ *
+ * This function is called once on component mount.
+ */
+
     try {
       const response = await fetch(
         'https://services3.arcgis.com/rl7ACuZkiFsmDA2g/arcgis/rest/services/Transit_Stops_and_Routes/FeatureServer/1/query?outFields=*&where=1%3D1&f=geojson'
@@ -111,6 +137,29 @@ const App: React.FC = () => {
 
   // Handle route selection from the Picker
   const handleRouteSelection = (routeId: string | null) => {
+    /**
+ * Handles user selection of a transit route.
+ *
+ * INPUT:
+ * - routeId: string | null — The ID of the selected route. If null, the function exits early.
+ *
+ * OUTPUT:
+ * - No return value.
+ * - Side Effects:
+ *   - Clears any existing marker simulation and associated timer.
+ *   - Updates application state to reflect the newly selected route.
+ *   - Adjusts the map view to fit the selected route's coordinates.
+ *
+ * Process:
+ * 1. If no routeId is provided, the function does nothing.
+ * 2. Stops the current simulation by clearing the marker and timer.
+ * 3. Searches for the route in `routeData` using the given routeId.
+ * 4. If the route is found:
+ *    - Updates the selected route state.
+ *    - Updates the map to display only that route.
+ *    - Uses `fitToCoordinates` to focus the map view on the selected route.
+ */
+
     if (!routeId) return;
 
     // Clear existing simulation
@@ -137,6 +186,28 @@ const App: React.FC = () => {
 
   // Function to calculate distances between coordinates
   const calculateRouteDistances = (coordinates: Coordinate[]) => {
+    /**
+ * Calculates the segment-wise and total distance of a route using the Haversine formula.
+ *
+ * INPUT:
+ * - coordinates: Coordinate[] — An array of latitude/longitude objects representing the path of a route.
+ *   Each Coordinate has the structure: { latitude: number, longitude: number }
+ *
+ * OUTPUT:
+ * - An object with:
+ *   - distances: number[] — Array of distances (in kilometers or meters, depending on haversine implementation)
+ *                            between each pair of consecutive coordinates.
+ *   - totalDistance: number — Sum of all segment distances (total route length).
+ *
+ * Process:
+ * - Iterates through the array of coordinates.
+ * - For each pair of consecutive coordinates, calculates the distance using `haversine(start, end)`.
+ * - Accumulates all individual segment distances and the total.
+ *
+ * Assumes:
+ * - A valid `haversine(start, end)` function is available and returns a numeric distance between two points.
+ */
+
     const distances = [];
     let totalDistance = 0;
 
@@ -154,6 +225,29 @@ const App: React.FC = () => {
 
   // Function to get position along the route based on distance traveled
   const getPositionAlongRoute = (
+    /**
+ * Calculates the geographic position along a route based on the total distance traveled.
+ *
+ * INPUT:
+ * - coordinates: Coordinate[] — Array of coordinates representing the full route.
+ * - distances: number[] — Array of distances between each pair of coordinates (same length as coordinates - 1).
+ * - distanceTraveled: number — The total distance traveled along the route (in same unit as `distances`).
+ *
+ * OUTPUT:
+ * - Coordinate — An interpolated { latitude, longitude } point along the route
+ *                corresponding to the `distanceTraveled`.
+ *
+ * Process:
+ * - Iterates through each segment of the route and accumulates distance.
+ * - When `distanceTraveled` falls within a segment, it linearly interpolates
+ *   between the segment's start and end coordinates to get the exact position.
+ * - If `distanceTraveled` exceeds the total route length, the function returns the final coordinate.
+ *
+ * Assumes:
+ * - The `distances` array aligns with the `coordinates` array, such that each entry in `distances`
+ *   represents the distance between `coordinates[i]` and `coordinates[i + 1]`.
+ */
+
     coordinates: Coordinate[],
     distances: number[],
     distanceTraveled: number
@@ -181,6 +275,34 @@ const App: React.FC = () => {
 
   // Start the simulation
   const startSimulation = () => {
+    /**
+ * Starts a route simulation by moving a marker along a selected route
+ * based on parsed telematics data (e.g., GPS + timestamp info).
+ *
+ * INPUT:
+ * - None (relies on component state and refs: `selectedRoute`, `routeData`, `parsedTelematicsData`, etc.)
+ *
+ * OUTPUT:
+ * - No return value.
+ * - Side Effects:
+ *   - Clears any existing simulation timer.
+ *   - Retrieves the selected route and calculates distances.
+ *   - Sorts telematics data by timestamp for sequential simulation.
+ *   - If any error occurs (e.g. no route selected, no data), shows an alert and exits early.
+ *
+ * Process:
+ * 1. Validates that a route has been selected.
+ * 2. Stops any previous simulation by clearing the existing timer.
+ * 3. Finds the corresponding route in `routeData`.
+ * 4. Uses `calculateRouteDistances()` to compute segment-wise and total distance.
+ * 5. Verifies and sorts the `parsedTelematicsData` based on timestamp (chronologically).
+ * 6. The actual simulation logic (e.g., stepping through data, updating marker position) is likely handled afterward.
+ *
+ * Assumptions:
+ * - `parsedTelematicsData` is an array of objects with at least a `timestamp` field.
+ * - `calculateRouteDistances()` returns distances and total route length.
+ */
+
     if (!selectedRoute) return;
 
     // Clear existing timer if any
@@ -224,6 +346,38 @@ const App: React.FC = () => {
     coordinates: Coordinate[],
     distances: number[]
   ) => {
+    /**
+ * Simulates a step in the route animation by updating the marker position
+ * based on the provided index in the telematics data.
+ *
+ * INPUT:
+ * - index: number — The current index in the telematics data array.
+ * - data: any[] — Sorted array of telematics data points. Each item must have at least:
+ *     - timestamp: ISO string or Date
+ *     - distance: number — Distance traveled along the route at that time.
+ * - coordinates: Coordinate[] — Array of latitude/longitude points defining the route path.
+ * - distances: number[] — Distances between each pair of coordinates (same length as coordinates - 1).
+ *
+ * OUTPUT:
+ * - No return value.
+ * - Side Effects:
+ *   - Updates marker position via `setMarkerPosition`.
+ *   - Advances the simulation by recursively calling `simulateStep` after a time delay.
+ *   - Ends the simulation when the end of the data array is reached.
+ *
+ * Process:
+ * 1. If `index` exceeds the data length, it stops the simulation.
+ * 2. Otherwise:
+ *    - Computes the current traveled distance.
+ *    - Finds the corresponding position on the route using `getPositionAlongRoute`.
+ *    - Schedules the next simulation step based on the timestamp difference.
+ *
+ * Assumes:
+ * - `simulationTimerRef` is a mutable ref object to manage the timeout.
+ * - `setMarkerPosition` updates the map marker's position.
+ * - Telematics data is sorted chronologically before this function is used.
+ */
+
     if (index >= data.length - 1) {
       // Simulation complete
       setMarkerPosition(null);
